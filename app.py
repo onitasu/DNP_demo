@@ -89,6 +89,13 @@ def _style_result_dataframe(df: pd.DataFrame) -> pd.io.formats.style.Styler:
     return visible_df.style.apply(lambda _: styles, axis=None)
 
 
+def _get_gemini_api_key() -> str:
+    secret_value = st.secrets.get("GEMINI_API_KEY", "")
+    if isinstance(secret_value, str) and secret_value:
+        return secret_value
+    return os.environ.get("GEMINI_API_KEY", "")
+
+
 # ── UI ────────────────────────────────────────────────────────────────────────
 
 st.set_page_config(page_title="AI-OCR Demo — 発注書読み取り", layout="wide")
@@ -128,9 +135,11 @@ if run_btn and uploaded is not None:
         st.error(f"ファイルサイズが {MAX_FILE_SIZE_MB}MB を超えています。")
         st.stop()
 
-    api_key = os.environ.get("GEMINI_API_KEY", "")
+    api_key = _get_gemini_api_key()
     if not api_key:
-        st.error("GEMINI_API_KEY が設定されていません。.env に記載してください。")
+        st.error(
+            "GEMINI_API_KEY が設定されていません。.env または Streamlit secrets に設定してください。"
+        )
         st.stop()
 
     # PDF かどうかで分岐
