@@ -1,15 +1,25 @@
 # Python
 __pycache__/
 *.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
 .env
-backend/.env
-backend/.venv
-
-# Node / Next.js
-frontend/node_modules
-frontend/.next
-frontend/.turbo
-frontend/.env.local
 
 # macOS
 .DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Streamlit
+.streamlit/secrets.toml
+
+# pytest
+.pytest_cache/
+htmlcov/
+.coverage
