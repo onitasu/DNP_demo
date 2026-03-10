@@ -253,3 +253,20 @@ class TestDrawBoundingBoxes:
             f"Expected low color on top. Pixel={center_pixel}, "
             f"dist_to_low={dist_to_low:.1f}, dist_to_high={dist_to_high:.1f}"
         )
+
+    def test_selected_field_gets_extra_highlight(self):
+        """Selected field should receive an additional black outline."""
+        img = _white_image(width=1000, height=1000)
+        segment = _make_segment(
+            field_name="order_number",
+            box_2d=[200, 200, 800, 800],
+            confidence="high",
+        )
+
+        result = draw_bounding_boxes(
+            img,
+            [segment],
+            selected_field_name="order_number",
+        )
+
+        assert result.getpixel((198, 198)) == (0, 0, 0)

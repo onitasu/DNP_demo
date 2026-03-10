@@ -5,6 +5,8 @@ from ocr.models import ConfidenceLevel, FieldSegment
 BOX_LINE_WIDTH = 3
 BOX_FILL_ALPHA = 51  # ~20% 透過
 LABEL_FONT_SIZE = 14
+SELECTED_OUTLINE_WIDTH = 8
+SELECTED_OUTLINE_MARGIN = 6
 
 _COLORS: dict[ConfidenceLevel, tuple[int, int, int]] = {
     "high": (33, 150, 243),
@@ -37,6 +39,7 @@ def normalize_to_pixel(
 def draw_bounding_boxes(
     image: Image.Image,
     segments: list[FieldSegment],
+    selected_field_name: str | None = None,
 ) -> Image.Image:
     """原本のコピーにバウンディングボックスを描画して返す。"""
     result = image.convert("RGB").copy()
@@ -83,6 +86,18 @@ def draw_bounding_boxes(
             width=BOX_LINE_WIDTH,
         )
 
+        if selected_field_name == seg.field_name:
+            draw.rectangle(
+                [
+                    x_min - SELECTED_OUTLINE_MARGIN,
+                    y_min - SELECTED_OUTLINE_MARGIN,
+                    x_max + SELECTED_OUTLINE_MARGIN,
+                    y_max + SELECTED_OUTLINE_MARGIN,
+                ],
+                outline=(0, 0, 0),
+                width=SELECTED_OUTLINE_WIDTH,
+            )
+
         # ラベル
         label = seg.field_name
         bbox = draw.textbbox((0, 0), label, font=font)
@@ -93,7 +108,7 @@ def draw_bounding_boxes(
 
         draw.rectangle(
             [label_x, label_y, label_x + text_w + 4, label_y + text_h + 4],
-            fill=color,
+            fill=(0, 0, 0) if selected_field_name == seg.field_name else color,
         )
         draw.text((label_x + 2, label_y + 2), label, fill=(255, 255, 255), font=font)
 

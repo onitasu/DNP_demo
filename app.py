@@ -5,12 +5,14 @@ from __future__ import annotations
 import io
 import os
 
+import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
 from PIL import Image, ImageOps
 
 from ocr.models import ConfidenceLevel, PipelineResult, PurchaseOrder
 from ocr.pipeline import run_pipeline
+from ocr.result_table import build_result_rows
 from ocr.visualizer import draw_bounding_boxes
 
 load_dotenv()
@@ -35,10 +37,6 @@ STEP2_MODELS = [
     "gemini-3.1-pro-preview",
 ]
 
-_CONFIDENCE_BADGE = {"high": "🔵", "medium": "🟡", "low": "🔴"}
-_CONFIDENCE_COLOR = {"high": "#2196F3", "medium": "#FFC107", "low": "#F44336"}
-
-
 # ── ヘルパー ──────────────────────────────────────────────────────────────────
 
 
@@ -60,25 +58,35 @@ def _count_by_confidence(order: PurchaseOrder) -> dict[ConfidenceLevel, int]:
     return counts
 
 
-def _badge(field: str, scores: dict[str, ConfidenceLevel]) -> str:
-    level = scores.get(field, "medium")
-    return _CONFIDENCE_BADGE[level]
+def _build_result_dataframe(result: PipelineResult) -> pd.DataFrame:
+    rows = build_result_rows(result.purchase_order, result.segments)
+    return pd.DataFrame(
+        [
+            {
+                "区分": row["section"],
+                "項目": row["label"],
+                "抽出値": row["value"],
+                "信頼性": row["confidence_label"],
+                "field_key": row["field_key"],
+            }
+            for row in rows
+        ]
+    )
 
 
-def _field_row(
-    label: str, value: object, key: str, scores: dict[str, ConfidenceLevel]
-) -> None:
-    level = scores.get(key, "medium")
-    badge = _CONFIDENCE_BADGE[level]
-    val_str = str(value) if value is not None else "—"
-    if level == "low":
-        st.markdown(
-            f"**{label}** &nbsp; **{val_str}** &nbsp; {badge}", unsafe_allow_html=True
-        )
-    else:
-        st.markdown(
-            f"**{label}** &nbsp; {val_str} &nbsp; {badge}", unsafe_allow_html=True
-        )
+def _style_result_dataframe(df: pd.DataFrame) -> pd.io.formats.style.Styler:
+    visible_df = df.drop(columns=["field_key"])
+    styles = pd.DataFrame("", index=visible_df.index, columns=visible_df.columns)
+
+    low_mask = (df["信頼性"] == "要確認") & (df["抽出値"] != "—")
+    medium_mask = (df["信頼性"] == "確認推奨") & (df["抽出値"] != "—")
+
+    styles.loc[low_mask, "抽出値"] = "color: #c62828; font-weight: 700;"
+    styles.loc[low_mask, "信頼性"] = "color: #c62828; font-weight: 700;"
+    styles.loc[medium_mask, "抽出値"] = "color: #111111; font-weight: 700;"
+    styles.loc[medium_mask, "信頼性"] = "color: #111111; font-weight: 700;"
+
+    return visible_df.style.apply(lambda _: styles, axis=None)
 
 
 # ── UI ────────────────────────────────────────────────────────────────────────
@@ -110,9 +118,6 @@ with st.sidebar:
         st.caption(f"処理時間: {r.processing_time_ms / 1000:.1f} 秒")
         st.caption(f"Step 1: {r.step1_model}")
         st.caption(f"Step 2: {r.step2_model}")
-
-# ─ メインエリア ─
-left_col, right_col = st.columns([1, 1])
 
 # ─ 解析実行 ─
 if run_btn and uploaded is not None:
@@ -167,85 +172,73 @@ preview_image: Image.Image | None = st.session_state.get("preview_image")
 
 if result is not None:
     order = result.purchase_order
-    scores = order.confidence_scores
     counts = _count_by_confidence(order)
 
-    # ヘッダー: サマリー
     st.markdown(
-        f"📊 **要確認: {counts['low']}件**（🔴赤枠）"
-        f" / 確認推奨: {counts['medium']}件（🟡黄枠）"
-        f" / OK: {counts['high']}件（🔵青枠）"
+        f"**要確認:** {counts['low']}件"
+        f" / **確認推奨:** {counts['medium']}件"
+        f" / **OK:** {counts['high']}件"
     )
     st.divider()
 
-with left_col:
-    st.subheader("原本 + 検出結果")
-    if uploaded is not None:
-        if result is not None and preview_image is not None and result.segments:
-            annotated = draw_bounding_boxes(preview_image, result.segments)
-            st.image(annotated, use_container_width=True)
-        elif preview_image is not None:
-            st.image(preview_image, use_container_width=True)
-        else:
-            st.info("PDF はプレビューできません。")
-    else:
-        st.info("左のサイドバーからファイルをアップロードしてください。")
+data_col, image_col = st.columns([1.15, 0.85])
 
-with right_col:
-    st.subheader("抽出データ")
-    if result is None:
+if result is None:
+    with data_col:
+        st.subheader("抽出データ一覧")
         st.info("解析実行後に結果が表示されます。")
-    else:
-        order = result.purchase_order
-        scores = order.confidence_scores
+    with image_col:
+        st.subheader("原本 + 検出結果")
+        st.info("左のサイドバーからファイルをアップロードしてください。")
+else:
+    result_df = _build_result_dataframe(result)
+    selected_field_name: str | None = None
 
-        with st.expander("発注基本情報", expanded=True):
-            _field_row("発注番号", order.order_number, "order_number", scores)
-            _field_row("発注日", order.order_date, "order_date", scores)
-            _field_row("納期", order.delivery_date, "delivery_date", scores)
-            _field_row("支払条件", order.payment_terms, "payment_terms", scores)
+    with data_col:
+        st.subheader("抽出データ一覧")
+        selection = st.dataframe(
+            _style_result_dataframe(result_df),
+            use_container_width=True,
+            hide_index=True,
+            on_select="rerun",
+            selection_mode="single-row",
+            key="result_table",
+            column_config={
+                "区分": st.column_config.TextColumn(width="medium"),
+                "項目": st.column_config.TextColumn(width="small"),
+                "抽出値": st.column_config.TextColumn(width="medium"),
+                "信頼性": st.column_config.TextColumn(width="small"),
+            },
+        )
 
-        with st.expander("発注元情報", expanded=True):
-            if order.orderer:
-                o = order.orderer
-                _field_row("会社名", o.company_name, "orderer.company_name", scores)
-                _field_row("部署名", o.department, "orderer.department", scores)
-                _field_row("担当者", o.contact_person, "orderer.contact_person", scores)
-                _field_row("住所", o.address, "orderer.address", scores)
-                _field_row("電話", o.phone, "orderer.phone", scores)
-                _field_row("FAX", o.fax, "orderer.fax", scores)
-                _field_row("メール", o.email, "orderer.email", scores)
+        selected_rows = selection.selection.rows
+        if selected_rows:
+            selected_row = result_df.iloc[selected_rows[0]]
+            selected_field_name = str(selected_row["field_key"])
+            st.caption(
+                f"選択中: {selected_row['区分']} / {selected_row['項目']} / {selected_row['抽出値']}"
+            )
+        else:
+            st.caption("表の行を選ぶと、画像上の枠を黒太枠で強調表示します。")
+
+    with image_col:
+        st.subheader("原本 + 検出結果")
+        if uploaded is not None:
+            if result.segments and preview_image is not None:
+                annotated = draw_bounding_boxes(
+                    preview_image,
+                    result.segments,
+                    selected_field_name=selected_field_name,
+                )
+                st.image(annotated, use_container_width=True)
+            elif preview_image is not None:
+                st.image(preview_image, use_container_width=True)
             else:
-                st.caption("発注元情報なし")
+                st.info("PDF はプレビューできません。")
+        else:
+            st.info("左のサイドバーからファイルをアップロードしてください。")
 
-        with st.expander("品目明細", expanded=True):
-            if order.items:
-                for i, item in enumerate(order.items):
-                    st.markdown(f"**品目 {i + 1}**")
-                    _field_row(
-                        "品番", item.item_number, f"items.{i}.item_number", scores
-                    )
-                    _field_row(
-                        "品名", item.description, f"items.{i}.description", scores
-                    )
-                    _field_row("数量", item.quantity, f"items.{i}.quantity", scores)
-                    _field_row("単位", item.unit, f"items.{i}.unit", scores)
-                    _field_row("単価", item.unit_price, f"items.{i}.unit_price", scores)
-                    _field_row("金額", item.amount, f"items.{i}.amount", scores)
-                    if i < len(order.items) - 1:
-                        st.divider()
-            else:
-                st.caption("品目なし")
-
-        with st.expander("金額情報", expanded=True):
-            _field_row("小計", order.subtotal, "subtotal", scores)
-            _field_row("消費税", order.tax_amount, "tax_amount", scores)
-            _field_row("合計", order.total_amount, "total_amount", scores)
-
-        with st.expander("その他"):
-            _field_row("納品先", order.delivery_address, "delivery_address", scores)
-            _field_row("備考", order.notes, "notes", scores)
-
+    with st.expander("詳細データ", expanded=False):
         tab_text, tab_json = st.tabs(["全文テキスト", "Raw JSON"])
         with tab_text:
             st.text(order.model_dump_json(indent=2))
